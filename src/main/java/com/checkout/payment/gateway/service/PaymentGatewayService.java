@@ -3,7 +3,6 @@ package com.checkout.payment.gateway.service;
 import com.checkout.payment.gateway.client.AcquiringBankClient;
 import com.checkout.payment.gateway.client.BankAuthorizationResponse;
 import com.checkout.payment.gateway.enums.PaymentStatus;
-import com.checkout.payment.gateway.exception.AcquiringBankException;
 import com.checkout.payment.gateway.exception.PaymentNotFoundException;
 import com.checkout.payment.gateway.idempotency.IdempotencyResult;
 import com.checkout.payment.gateway.idempotency.IdempotencyStore;
@@ -49,14 +48,8 @@ public class PaymentGatewayService {
   }
 
   private PostPaymentResponse doProcess(PostPaymentRequest request) {
-    BankAuthorizationResponse bankResponse;
-    try {
-      bankResponse = acquiringBankClient.authorize(
-          PaymentMapper.toBankAuthorizationRequest(request));
-    } catch (AcquiringBankException ex) {
-      log.warn("Acquiring bank call failed for last4={}", request.getLastFour());
-      throw ex;
-    }
+    BankAuthorizationResponse bankResponse = acquiringBankClient.authorize(
+        PaymentMapper.toBankAuthorizationRequest(request));
 
     PaymentStatus status = bankResponse.isAuthorized()
         ? PaymentStatus.AUTHORIZED
@@ -65,8 +58,11 @@ public class PaymentGatewayService {
     PostPaymentResponse response =
         PaymentMapper.toPaymentResponse(UUID.randomUUID(), status, request);
     paymentsRepository.add(response);
+
     log.info("Processed payment id={} status={} last4={}",
-        response.getId(), status, response.getCardNumberLastFour());
+        response.getId(),
+        status,
+        response.getCardNumberLastFour());
     return response;
   }
 }
