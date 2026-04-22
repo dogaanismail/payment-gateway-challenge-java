@@ -5,6 +5,9 @@ import com.checkout.payment.gateway.client.BankAuthorizationResponse;
 import com.checkout.payment.gateway.enums.PaymentStatus;
 import com.checkout.payment.gateway.exception.AcquiringBankException;
 import com.checkout.payment.gateway.exception.PaymentNotFoundException;
+import com.checkout.payment.gateway.idempotency.IdempotencyResult;
+import com.checkout.payment.gateway.idempotency.IdempotencyStore;
+import com.checkout.payment.gateway.idempotency.RequestFingerprinter;
 import com.checkout.payment.gateway.mapper.PaymentMapper;
 import com.checkout.payment.gateway.model.PostPaymentRequest;
 import com.checkout.payment.gateway.model.PostPaymentResponse;
@@ -21,16 +24,35 @@ public class PaymentGatewayService {
 
   private final PaymentsRepository paymentsRepository;
   private final AcquiringBankClient acquiringBankClient;
+  private final IdempotencyStore idempotencyStore;
 
   public PostPaymentResponse getPaymentById(UUID id) {
     log.debug("Fetching payment with id={}", id);
     return paymentsRepository.get(id).orElseThrow(() -> new PaymentNotFoundException(id));
   }
 
-  public PostPaymentResponse processPayment(PostPaymentRequest request) {
+  public ProcessedPayment processPayment(PostPaymentRequest request, String idempotencyKey) {
+    if (idempotencyKey == null || idempotencyKey.isBlank()) {
+      return new ProcessedPayment(doProcess(request), false);
+    }
+
+    String fingerprint = RequestFingerprinter.fingerprint(request);
+    IdempotencyResult result = idempotencyStore.computeIfAbsent(
+        idempotencyKey, fingerprint, () -> doProcess(request));
+
+    if (result.replayed()) {
+      log.info("Replayed idempotent payment id={} key={}",
+          result.response().getId(), idempotencyKey);
+    }
+
+    return new ProcessedPayment(result.response(), result.replayed());
+  }
+
+  private PostPaymentResponse doProcess(PostPaymentRequest request) {
     BankAuthorizationResponse bankResponse;
     try {
-      bankResponse = acquiringBankClient.authorize(PaymentMapper.toBankAuthorizationRequest(request));
+      bankResponse = acquiringBankClient.authorize(
+          PaymentMapper.toBankAuthorizationRequest(request));
     } catch (AcquiringBankException ex) {
       log.warn("Acquiring bank call failed for last4={}", request.getLastFour());
       throw ex;

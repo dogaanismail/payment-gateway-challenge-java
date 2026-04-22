@@ -2,8 +2,7 @@ package com.checkout.payment.gateway.exception;
 
 import com.checkout.payment.gateway.model.ApiErrorResponse;
 import com.checkout.payment.gateway.model.ApiErrorResponse.FieldViolation;
-import jakarta.servlet.http.HttpServletRequest;
-import java.util.List;
+import jakarta.servlet.http.HttpServletRequest;import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -13,6 +12,7 @@ import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 @Slf4j
@@ -47,6 +47,14 @@ public class CommonExceptionHandler {
         cause != null ? cause.getMessage() : ex.getMessage());
     return ResponseEntity.badRequest().body(ApiErrorResponse.rejected(
         "MALFORMED_REQUEST", "Malformed request body", null, req.getRequestURI()));
+  }
+
+  @ExceptionHandler(HandlerMethodValidationException.class)
+  public ResponseEntity<ApiErrorResponse> handleHandlerValidation(
+      HandlerMethodValidationException ex, HttpServletRequest req) {
+    log.info("Rejected request due to invalid parameter: {}", ex.getMessage());
+    return ResponseEntity.badRequest().body(ApiErrorResponse.rejected(
+        "INVALID_PARAMETER", "Invalid request parameter", null, req.getRequestURI()));
   }
 
   @ExceptionHandler(MethodArgumentTypeMismatchException.class)
@@ -85,6 +93,15 @@ public class CommonExceptionHandler {
     return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
         .body(ApiErrorResponse.of("Error", "ACQUIRING_BANK_UNAVAILABLE",
             "Acquiring bank unavailable", req.getRequestURI()));
+  }
+
+  @ExceptionHandler(IdempotencyKeyReuseException.class)
+  public ResponseEntity<ApiErrorResponse> handleIdempotencyReuse(IdempotencyKeyReuseException ex,
+      HttpServletRequest req) {
+    log.warn("Idempotency key reused with different body: {}", ex.getKey());
+    return ResponseEntity.status(HttpStatus.UNPROCESSABLE_CONTENT)
+        .body(ApiErrorResponse.of("Error", "IDEMPOTENCY_KEY_REUSED",
+            "Idempotency-Key was reused with a different request body", req.getRequestURI()));
   }
 
   @ExceptionHandler(Exception.class)
