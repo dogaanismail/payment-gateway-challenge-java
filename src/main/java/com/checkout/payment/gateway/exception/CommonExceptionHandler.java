@@ -2,7 +2,8 @@ package com.checkout.payment.gateway.exception;
 
 import com.checkout.payment.gateway.model.ApiErrorResponse;
 import com.checkout.payment.gateway.model.ApiErrorResponse.FieldViolation;
-import jakarta.servlet.http.HttpServletRequest;import java.util.List;
+import jakarta.servlet.http.HttpServletRequest;
+import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -19,12 +20,14 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 @RestControllerAdvice
 public class CommonExceptionHandler {
 
+  private static final String STATUS_ERROR = "Error";
+
   @ExceptionHandler(PaymentNotFoundException.class)
   public ResponseEntity<ApiErrorResponse> handleNotFound(PaymentNotFoundException ex,
       HttpServletRequest req) {
     log.debug("Payment not found", ex);
     return ResponseEntity.status(HttpStatus.NOT_FOUND)
-        .body(ApiErrorResponse.of("Error", "PAYMENT_NOT_FOUND", "Payment not found",
+        .body(ApiErrorResponse.of(STATUS_ERROR, "PAYMENT_NOT_FOUND", "Payment not found",
             req.getRequestURI()));
   }
 
@@ -42,9 +45,8 @@ public class CommonExceptionHandler {
   @ExceptionHandler(HttpMessageNotReadableException.class)
   public ResponseEntity<ApiErrorResponse> handleUnreadable(HttpMessageNotReadableException ex,
       HttpServletRequest req) {
-    Throwable cause = ex.getMostSpecificCause();
     log.info("Rejected payment due to malformed request: {}",
-        cause != null ? cause.getMessage() : ex.getMessage());
+        ex.getMostSpecificCause().getMessage());
     return ResponseEntity.badRequest().body(ApiErrorResponse.rejected(
         "MALFORMED_REQUEST", "Malformed request body", null, req.getRequestURI()));
   }
@@ -72,7 +74,7 @@ public class CommonExceptionHandler {
       HttpMediaTypeNotSupportedException ex, HttpServletRequest req) {
     log.info("Unsupported media type: {}", ex.getContentType());
     return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
-        .body(ApiErrorResponse.of("Error", "UNSUPPORTED_MEDIA_TYPE",
+        .body(ApiErrorResponse.of(STATUS_ERROR, "UNSUPPORTED_MEDIA_TYPE",
             "Content-Type must be application/json", req.getRequestURI()));
   }
 
@@ -81,8 +83,19 @@ public class CommonExceptionHandler {
       HttpRequestMethodNotSupportedException ex, HttpServletRequest req) {
     log.info("Method not allowed: {}", ex.getMethod());
     return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED)
-        .body(ApiErrorResponse.of("Error", "METHOD_NOT_ALLOWED",
+        .body(ApiErrorResponse.of(STATUS_ERROR, "METHOD_NOT_ALLOWED",
             "HTTP method " + ex.getMethod() + " is not supported on this endpoint",
+            req.getRequestURI()));
+  }
+
+  @ExceptionHandler(BankServiceUnavailableException.class)
+  public ResponseEntity<ApiErrorResponse> handleBankUnavailable(
+      BankServiceUnavailableException ex, HttpServletRequest req) {
+    log.warn("Acquiring bank unavailable: {}", ex.getMessage());
+    return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+        .header("Retry-After", "30")
+        .body(ApiErrorResponse.of(STATUS_ERROR, "ACQUIRING_BANK_SERVICE_UNAVAILABLE",
+            "Acquiring bank is temporarily unavailable, please retry shortly",
             req.getRequestURI()));
   }
 
@@ -91,7 +104,7 @@ public class CommonExceptionHandler {
       HttpServletRequest req) {
     log.error("Acquiring bank failure", ex);
     return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
-        .body(ApiErrorResponse.of("Error", "ACQUIRING_BANK_UNAVAILABLE",
+        .body(ApiErrorResponse.of(STATUS_ERROR, "ACQUIRING_BANK_UNAVAILABLE",
             "Acquiring bank unavailable", req.getRequestURI()));
   }
 
@@ -100,7 +113,7 @@ public class CommonExceptionHandler {
       HttpServletRequest req) {
     log.warn("Idempotency key reused with different body: {}", ex.getKey());
     return ResponseEntity.status(HttpStatus.UNPROCESSABLE_CONTENT)
-        .body(ApiErrorResponse.of("Error", "IDEMPOTENCY_KEY_REUSED",
+        .body(ApiErrorResponse.of(STATUS_ERROR, "IDEMPOTENCY_KEY_REUSED",
             "Idempotency-Key was reused with a different request body", req.getRequestURI()));
   }
 
@@ -108,7 +121,7 @@ public class CommonExceptionHandler {
   public ResponseEntity<ApiErrorResponse> handleUnexpected(Exception ex, HttpServletRequest req) {
     log.error("Unexpected error", ex);
     return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-        .body(ApiErrorResponse.of("Error", "INTERNAL_ERROR", "Internal server error",
+        .body(ApiErrorResponse.of(STATUS_ERROR, "INTERNAL_ERROR", "Internal server error",
             req.getRequestURI()));
   }
 }
