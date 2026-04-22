@@ -1,7 +1,10 @@
 package com.checkout.payment.gateway.controller;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -187,4 +190,64 @@ class PaymentGatewayControllerTest {
         .andExpect(status().isMethodNotAllowed())
         .andExpect(jsonPath("$.code").value("METHOD_NOT_ALLOWED"));
   }
+
+  @Test
+  void shouldReplayResponseWhenSameIdempotencyKeyIsReused() throws Exception {
+    when(acquiringBankClient.authorize(any()))
+        .thenReturn(new BankAuthorizationResponse(true, "auth-xyz"));
+    String key = "idem-" + UUID.randomUUID();
+    String body = "{\"card_number\":\"2222405343248877\",\"expiry_month\":4,\"expiry_year\":2030,\"currency\":\"GBP\",\"amount\":100,\"cvv\":\"123\"}";
+
+    String firstId = mvc.perform(MockMvcRequestBuilders.post("/api/v1/payments")
+            .header("Idempotency-Key", key)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(body))
+        .andExpect(status().isCreated())
+        .andExpect(header().string("Idempotent-Replayed", "false"))
+        .andReturn().getResponse().getContentAsString();
+
+    mvc.perform(MockMvcRequestBuilders.post("/api/v1/payments")
+            .header("Idempotency-Key", key)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(body))
+        .andExpect(status().isCreated())
+        .andExpect(header().string("Idempotent-Replayed", "true"))
+        .andExpect(content().json(firstId));
+
+    verify(acquiringBankClient, times(1)).authorize(any());
+  }
+
+  @Test
+  void shouldReturnUnprocessableEntityWhenIdempotencyKeyIsReusedWithDifferentBody() throws Exception {
+    when(acquiringBankClient.authorize(any()))
+        .thenReturn(new BankAuthorizationResponse(true, "auth-xyz"));
+    String key = "idem-" + UUID.randomUUID();
+
+    mvc.perform(MockMvcRequestBuilders.post("/api/v1/payments")
+            .header("Idempotency-Key", key)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("{\"card_number\":\"2222405343248877\",\"expiry_month\":4,\"expiry_year\":2030,\"currency\":\"GBP\",\"amount\":100,\"cvv\":\"123\"}"))
+        .andExpect(status().isCreated());
+
+    mvc.perform(MockMvcRequestBuilders.post("/api/v1/payments")
+            .header("Idempotency-Key", key)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("{\"card_number\":\"2222405343248877\",\"expiry_month\":4,\"expiry_year\":2030,\"currency\":\"GBP\",\"amount\":999,\"cvv\":\"123\"}"))
+        .andExpect(status().isUnprocessableContent())
+        .andExpect(jsonPath("$.code").value("IDEMPOTENCY_KEY_REUSED"));
+  }
+
+  @Test
+  void shouldEchoIncomingRequestIdHeader() throws Exception {
+    mvc.perform(MockMvcRequestBuilders.get("/api/v1/payments/" + UUID.randomUUID())
+            .header("X-Request-Id", "trace-42"))
+        .andExpect(header().string("X-Request-Id", "trace-42"));
+  }
+
+  @Test
+  void shouldGenerateRequestIdWhenHeaderIsAbsent() throws Exception {
+    mvc.perform(MockMvcRequestBuilders.get("/api/v1/payments/" + UUID.randomUUID()))
+        .andExpect(header().exists("X-Request-Id"));
+  }
 }
+
