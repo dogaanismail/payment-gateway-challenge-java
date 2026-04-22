@@ -11,9 +11,11 @@ import java.io.Serializable;
 import java.time.YearMonth;
 import lombok.Getter;
 import lombok.Setter;
+import lombok.ToString;
 
 @Getter
 @Setter
+@ToString(exclude = {"cardNumber", "cvv"})
 public class PostPaymentRequest implements Serializable {
 
   @JsonProperty("card_number")
