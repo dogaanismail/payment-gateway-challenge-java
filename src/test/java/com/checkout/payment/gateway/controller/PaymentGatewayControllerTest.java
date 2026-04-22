@@ -126,7 +126,11 @@ class PaymentGatewayControllerTest {
                 }
                 """))
         .andExpect(status().isBadRequest())
-        .andExpect(jsonPath("$.status").value("Rejected"));
+        .andExpect(jsonPath("$.status").value("Rejected"))
+        .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+        .andExpect(jsonPath("$.errors").isArray())
+        .andExpect(jsonPath("$.errors[*].field",
+            org.hamcrest.Matchers.hasItems("cardNumber", "expiryMonth", "currency", "amount", "cvv")));
   }
 
   @Test
@@ -147,5 +151,40 @@ class PaymentGatewayControllerTest {
                 }
                 """))
         .andExpect(status().isBadGateway());
+  }
+
+  @Test
+  void shouldReturnBadRequestWhenPaymentIdIsNotAUuid() throws Exception {
+    mvc.perform(MockMvcRequestBuilders.get("/api/v1/payments/not-a-uuid"))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.status").value("Rejected"))
+        .andExpect(jsonPath("$.code").value("INVALID_PARAMETER"))
+        .andExpect(jsonPath("$.errors[0].field").value("id"));
+  }
+
+  @Test
+  void shouldReturnRejectedWhenJsonBodyIsMalformed() throws Exception {
+    mvc.perform(MockMvcRequestBuilders.post("/api/v1/payments")
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("{not valid json"))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.status").value("Rejected"))
+        .andExpect(jsonPath("$.code").value("MALFORMED_REQUEST"));
+  }
+
+  @Test
+  void shouldReturnUnsupportedMediaTypeWhenContentTypeIsNotJson() throws Exception {
+    mvc.perform(MockMvcRequestBuilders.post("/api/v1/payments")
+            .contentType(MediaType.TEXT_PLAIN)
+            .content("hello"))
+        .andExpect(status().isUnsupportedMediaType())
+        .andExpect(jsonPath("$.code").value("UNSUPPORTED_MEDIA_TYPE"));
+  }
+
+  @Test
+  void shouldReturnMethodNotAllowedWhenHttpMethodIsNotSupported() throws Exception {
+    mvc.perform(MockMvcRequestBuilders.delete("/api/v1/payments/" + UUID.randomUUID()))
+        .andExpect(status().isMethodNotAllowed())
+        .andExpect(jsonPath("$.code").value("METHOD_NOT_ALLOWED"));
   }
 }
