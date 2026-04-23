@@ -11,6 +11,7 @@ import com.checkout.payment.gateway.mapper.PaymentMapper;
 import com.checkout.payment.gateway.model.PostPaymentRequest;
 import com.checkout.payment.gateway.model.PostPaymentResponse;
 import com.checkout.payment.gateway.repository.PaymentsRepository;
+import java.time.Duration;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -31,10 +32,30 @@ public class PaymentGatewayService {
   }
 
   public ProcessedPayment processPayment(PostPaymentRequest request, String idempotencyKey) {
-    if (idempotencyKey == null || idempotencyKey.isBlank()) {
-      return new ProcessedPayment(doProcess(request), false);
-    }
+    log.debug("Processing payment last4={} amount={} currency={} idempotencyKey={}",
+        request.getLastFour(), request.getAmount(), request.getCurrency(),
+        idempotencyKey == null ? "<none>" : "<present>");
 
+    long startNanos = System.nanoTime();
+    try {
+      ProcessedPayment processed = (idempotencyKey == null || idempotencyKey.isBlank())
+          ? new ProcessedPayment(doProcess(request), false)
+          : processIdempotent(request, idempotencyKey);
+
+      log.info("Payment processed id={} status={} replayed={} durationMs={}",
+          processed.response().getId(),
+          processed.response().getStatus(),
+          processed.replayed(),
+          elapsedMs(startNanos));
+      return processed;
+    } catch (RuntimeException ex) {
+      log.warn("Payment failed last4={} durationMs={} cause={}",
+          request.getLastFour(), elapsedMs(startNanos), ex.toString());
+      throw ex;
+    }
+  }
+
+  private ProcessedPayment processIdempotent(PostPaymentRequest request, String idempotencyKey) {
     String fingerprint = RequestFingerprinter.fingerprint(request);
     IdempotencyResult result = idempotencyStore.computeIfAbsent(
         idempotencyKey, fingerprint, () -> doProcess(request));
@@ -58,11 +79,10 @@ public class PaymentGatewayService {
     PostPaymentResponse response =
         PaymentMapper.toPaymentResponse(UUID.randomUUID(), status, request);
     paymentsRepository.add(response);
-
-    log.info("Processed payment id={} status={} last4={}",
-        response.getId(),
-        status,
-        response.getCardNumberLastFour());
     return response;
+  }
+
+  private static long elapsedMs(long startNanos) {
+    return Duration.ofNanos(System.nanoTime() - startNanos).toMillis();
   }
 }

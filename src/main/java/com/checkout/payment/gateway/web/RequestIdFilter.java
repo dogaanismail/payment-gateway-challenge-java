@@ -16,25 +16,38 @@ import org.springframework.web.filter.OncePerRequestFilter;
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public class RequestIdFilter extends OncePerRequestFilter {
 
-  public static final String HEADER = "X-Request-Id";
-  public static final String MDC_KEY = "requestId";
+  public static final String REQUEST_ID_HEADER = "X-Request-Id";
+  public static final String CORRELATION_ID_HEADER = "X-Correlation-Id";
+  public static final String REQUEST_ID_MDC_KEY = "requestId";
+  public static final String CORRELATION_ID_MDC_KEY = "correlationId";
 
   @Override
   protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
       FilterChain chain) throws ServletException, IOException {
 
-    String requestId = request.getHeader(HEADER);
-    if (requestId == null || requestId.isBlank()) {
-      requestId = UUID.randomUUID().toString();
-    }
+    String requestId = headerOrGenerate(request, REQUEST_ID_HEADER);
+    String correlationId = headerOrDefault(request, CORRELATION_ID_HEADER, requestId);
 
-    response.setHeader(HEADER, requestId);
-    MDC.put(MDC_KEY, requestId);
+    response.setHeader(REQUEST_ID_HEADER, requestId);
+    response.setHeader(CORRELATION_ID_HEADER, correlationId);
+    MDC.put(REQUEST_ID_MDC_KEY, requestId);
+    MDC.put(CORRELATION_ID_MDC_KEY, correlationId);
 
     try {
       chain.doFilter(request, response);
     } finally {
-      MDC.remove(MDC_KEY);
+      MDC.remove(REQUEST_ID_MDC_KEY);
+      MDC.remove(CORRELATION_ID_MDC_KEY);
     }
+  }
+
+  private static String headerOrGenerate(HttpServletRequest request, String name) {
+    String value = request.getHeader(name);
+    return (value == null || value.isBlank()) ? UUID.randomUUID().toString() : value;
+  }
+
+  private static String headerOrDefault(HttpServletRequest request, String name, String fallback) {
+    String value = request.getHeader(name);
+    return (value == null || value.isBlank()) ? fallback : value;
   }
 }
