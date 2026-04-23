@@ -13,9 +13,11 @@ import com.checkout.payment.gateway.client.AcquiringBankClient;
 import com.checkout.payment.gateway.client.BankAuthorizationResponse;
 import com.checkout.payment.gateway.enums.PaymentStatus;
 import com.checkout.payment.gateway.exception.AcquiringBankException;
+import com.checkout.payment.gateway.exception.BankServiceUnavailableException;
 import com.checkout.payment.gateway.model.PostPaymentResponse;
 import com.checkout.payment.gateway.repository.PaymentsRepository;
 import java.util.UUID;
+import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -133,7 +135,8 @@ class PaymentGatewayControllerTest {
         .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
         .andExpect(jsonPath("$.errors").isArray())
         .andExpect(jsonPath("$.errors[*].field",
-            org.hamcrest.Matchers.hasItems("cardNumber", "expiryMonth", "currency", "amount", "cvv")));
+            org.hamcrest.Matchers.hasItems("cardNumber", "expiryMonth", "currency", "amount",
+                "cvv")));
   }
 
   @Test
@@ -218,7 +221,8 @@ class PaymentGatewayControllerTest {
   }
 
   @Test
-  void shouldReturnUnprocessableEntityWhenIdempotencyKeyIsReusedWithDifferentBody() throws Exception {
+  void shouldReturnUnprocessableEntityWhenIdempotencyKeyIsReusedWithDifferentBody()
+      throws Exception {
     when(acquiringBankClient.authorize(any()))
         .thenReturn(new BankAuthorizationResponse(true, "auth-xyz"));
     String key = "idem-" + UUID.randomUUID();
@@ -226,13 +230,15 @@ class PaymentGatewayControllerTest {
     mvc.perform(MockMvcRequestBuilders.post("/api/v1/payments")
             .header("Idempotency-Key", key)
             .contentType(MediaType.APPLICATION_JSON)
-            .content("{\"card_number\":\"2222405343248877\",\"expiry_month\":4,\"expiry_year\":2030,\"currency\":\"GBP\",\"amount\":100,\"cvv\":\"123\"}"))
+            .content(
+                "{\"card_number\":\"2222405343248877\",\"expiry_month\":4,\"expiry_year\":2030,\"currency\":\"GBP\",\"amount\":100,\"cvv\":\"123\"}"))
         .andExpect(status().isCreated());
 
     mvc.perform(MockMvcRequestBuilders.post("/api/v1/payments")
             .header("Idempotency-Key", key)
             .contentType(MediaType.APPLICATION_JSON)
-            .content("{\"card_number\":\"2222405343248877\",\"expiry_month\":4,\"expiry_year\":2030,\"currency\":\"GBP\",\"amount\":999,\"cvv\":\"123\"}"))
+            .content(
+                "{\"card_number\":\"2222405343248877\",\"expiry_month\":4,\"expiry_year\":2030,\"currency\":\"GBP\",\"amount\":999,\"cvv\":\"123\"}"))
         .andExpect(status().isUnprocessableContent())
         .andExpect(jsonPath("$.code").value("IDEMPOTENCY_KEY_REUSED"));
   }
@@ -248,6 +254,90 @@ class PaymentGatewayControllerTest {
   void shouldGenerateRequestIdWhenHeaderIsAbsent() throws Exception {
     mvc.perform(MockMvcRequestBuilders.get("/api/v1/payments/" + UUID.randomUUID()))
         .andExpect(header().exists("X-Request-Id"));
+  }
+
+  @Test
+  void shouldReturnServiceUnavailableWhenAcquiringBankReturns503() throws Exception {
+    when(acquiringBankClient.authorize(any()))
+        .thenThrow(new BankServiceUnavailableException("bank 503"));
+
+    mvc.perform(MockMvcRequestBuilders.post("/api/v1/payments")
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("""
+                {
+                  "card_number": "2222405343248870",
+                  "expiry_month": 4,
+                  "expiry_year": 2030,
+                  "currency": "EUR",
+                  "amount": 200,
+                  "cvv": "123"
+                }
+                """))
+        .andExpect(status().isServiceUnavailable())
+        .andExpect(header().string("Retry-After", "30"))
+        .andExpect(jsonPath("$.code").value("ACQUIRING_BANK_SERVICE_UNAVAILABLE"));
+  }
+
+  @Test
+  void shouldNeverReturnFullCardNumberOrCvvAndShouldExposeOnlyLastFour() throws Exception {
+    when(acquiringBankClient.authorize(any()))
+        .thenReturn(new BankAuthorizationResponse(true, "auth-mask"));
+
+    String body = mvc.perform(MockMvcRequestBuilders.post("/api/v1/payments")
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("""
+                {
+                  "card_number": "4242424242421111",
+                  "expiry_month": 4,
+                  "expiry_year": 2030,
+                  "currency": "GBP",
+                  "amount": 100,
+                  "cvv": "987"
+                }
+                """))
+        .andExpect(status().isCreated())
+        .andExpect(jsonPath("$.card_number_last_four").value("1111"))
+        .andExpect(jsonPath("$.card_number").doesNotExist())
+        .andExpect(jsonPath("$.cardNumber").doesNotExist())
+        .andExpect(jsonPath("$.cvv").doesNotExist())
+        .andReturn().getResponse().getContentAsString();
+
+    Assertions.assertThat(body)
+        .doesNotContain("4242424242421111")
+        .doesNotContain("987");
+  }
+
+  @Test
+  void shouldNotPersistOrReturnCvvWhenFetchingPaymentById() throws Exception {
+    when(acquiringBankClient.authorize(any()))
+        .thenReturn(new BankAuthorizationResponse(true, "auth-store"));
+
+    String createdBody = mvc.perform(MockMvcRequestBuilders.post("/api/v1/payments")
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("""
+                {
+                  "card_number": "4242424242421111",
+                  "expiry_month": 4,
+                  "expiry_year": 2030,
+                  "currency": "GBP",
+                  "amount": 100,
+                  "cvv": "987"
+                }
+                """))
+        .andExpect(status().isCreated())
+        .andReturn().getResponse().getContentAsString();
+
+    String id = com.jayway.jsonpath.JsonPath.read(createdBody, "$.id");
+
+    String fetched = mvc.perform(MockMvcRequestBuilders.get("/api/v1/payments/" + id))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.cvv").doesNotExist())
+        .andExpect(jsonPath("$.card_number").doesNotExist())
+        .andReturn().getResponse().getContentAsString();
+
+    Assertions.assertThat(fetched)
+        .doesNotContain("4242424242421111")
+        .doesNotContain("987");
   }
 }
 
